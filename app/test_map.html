@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test Co-Movilidad</title>
+  <script src="https://maps.googleapis.com/maps/api/js?key=TU_API_KEY"></script>
+</head>
+<body>
+  <h2>Mapa de Matching</h2>
+  <div id="map" style="height: 500px;"></div>
+
+  <script>
+    const map = new google.maps.Map(document.getElementById("map"), {
+      center: { lat: 4.6486, lng: -74.0741 }, // Bogotá
+      zoom: 13,
+    });
+
+    // Usuario actual (driver)
+    const myLocation = { lat: 4.6486, lng: -74.0741 };
+
+    new google.maps.Marker({
+      position: myLocation,
+      map,
+      label: "YO",
+    });
+
+    // Simulación de candidatos (puedes reemplazar con API)
+    const candidates = [
+      { lat: 4.649, lng: -74.075, name: "Ana" },
+      { lat: 4.651, lng: -74.073, name: "Luis" },
+    ];
+
+    candidates.forEach(c => {
+      new google.maps.Marker({
+        position: { lat: c.lat, lng: c.lng },
+        map,
+        label: c.name,
+      });
+    });
+  </script>
+</body>
+</html>
