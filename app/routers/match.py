@@ -50,6 +50,7 @@ class MatchCandidate(BaseModel):
 class MatchResponse(BaseModel):
     candidates: List[MatchCandidate]
     total: int
+    message: Optional[str] = None 
 
 
 # ────────────────────────────────────────
@@ -180,6 +181,13 @@ async def find_candidates(
 
     # 3. Ordenar por score descendente (mejor primero) — HU-12
     candidates.sort(key=lambda c: c.relevance_score, reverse=True)
+
+    if not candidates:
+        return MatchResponse(
+            candidates=[],
+            total=0,
+            message="No se encontraron viajes que coincidan con tu búsqueda."
+        )
 
     return MatchResponse(candidates=candidates, total=len(candidates))
 
