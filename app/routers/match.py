@@ -277,3 +277,169 @@ async def publish_trip(
         destination_h3=dest_h3,
         message="Viaje publicado correctamente",
     )
+
+
+
+
+# ────────────────────────────────────────
+# MODELOS — HU-16
+# ────────────────────────────────────────
+
+class NearbyTripMarker(BaseModel):
+    trip_id: int
+    driver_name: str
+    # Coordenadas para el marcador en Google Maps
+    origin_lat: float
+    origin_lng: float
+    destination_lat: float
+    destination_lng: float
+    # Datos para el popup del marcador
+    origin_address: str
+    destination_address: str
+    departure_datetime: datetime
+    available_seats: int
+    cost_per_passenger: Optional[float]
+    distance_h3_origin: int
+    relevance_score: float
+
+
+class NearbyTripsResponse(BaseModel):
+    markers: List[NearbyTripMarker]
+    total: int
+    center_lat: float   # Centro del mapa (ubicación del pasajero)
+    center_lng: float   # Centro del mapa (ubicación del pasajero)
+    message: Optional[str] = None
+
+
+# ────────────────────────────────────────
+# ENDPOINT: Mapa con ofertantes cercanos
+# HU-16
+# ────────────────────────────────────────
+
+@router.get("/nearby", response_model=NearbyTripsResponse)
+async def get_nearby_trips(
+    my_h3_origin: str,
+    my_h3_destination: str,
+    my_lat: float,
+    my_lng: float,
+    departure_time: datetime,
+    time_tolerance_minutes: int = 30,
+    max_h3_distance: int = 1,
+    user: dict = Depends(get_current_user),
+):
+    """
+    Devuelve viajes disponibles cercanos al pasajero con coordenadas
+    listas para pintar marcadores en Google Maps.
+    HU-16: Ver mapa con ofertantes cercanos.
+    """
+    # 1. Expandir radio de búsqueda H3
+    search_origins = h3_neighbors(my_h3_origin, max_h3_distance)
+    search_dests   = h3_neighbors(my_h3_destination, max_h3_distance)
+
+    origins_tuple = tuple(search_origins) if len(search_origins) > 1 else (search_origins[0], search_origins[0])
+    dests_tuple   = tuple(search_dests)   if len(search_dests)   > 1 else (search_dests[0],   search_dests[0])
+
+    tolerance_seconds = time_tolerance_minutes * 60
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT
+                    t.id,
+                    t.conductor_id,
+                    t.origin_h3,
+                    t.destination_h3,
+                    t.origen,
+                    t.destino,
+                    t.hora_inicio,
+                    t.available_seats,
+                    t.cost_per_passenger,
+                    t.origin_lat,
+                    t.origin_lng,
+                    t.destination_lat,
+                    t.destination_lng,
+                    u.nombre_completo AS driver_name
+                FROM trayectos t
+                JOIN users_ean.usuarios u ON u.id = t.conductor_id
+                WHERE
+                    t.origin_h3 IN %s
+                    AND t.destination_h3 IN %s
+                    AND t.status = 'open'
+                    AND t.available_seats > 0
+                    AND t.origin_lat IS NOT NULL
+                    AND t.origin_lng IS NOT NULL
+                    AND ABS(TIMESTAMPDIFF(SECOND, t.hora_inicio, %s)) <= %s
+                ORDER BY t.hora_inicio ASC
+                """,
+                (origins_tuple, dests_tuple, departure_time, tolerance_seconds),
+            )
+            rows = await cur.fetchall()
+
+    # 2. Construir marcadores
+    markers: List[NearbyTripMarker] = []
+
+    for row in rows:
+        (trip_id, driver_id, origin_h3, destination_h3,
+         origen, destino, departure_dt, available_seats,
+         cost, o_lat, o_lng, d_lat, d_lng, driver_name) = row
+
+        # Excluir el propio conductor
+        if str(driver_id) == str(user.get("sub")):
+            continue
+
+        # Saltar viajes sin coordenadas
+        if o_lat is None or o_lng is None:
+            continue
+
+        try:
+            h3_dist = grid_distance(my_h3_origin, origin_h3)
+        except Exception:
+            h3_dist = 999
+
+        time_diff = abs(
+            (departure_dt - departure_time).total_seconds() / 60
+        )
+
+        score = calculate_score(
+            h3_dist,
+            time_diff,
+            max_h3_distance,
+            time_tolerance_minutes,
+        )
+
+        markers.append(NearbyTripMarker(
+            trip_id=trip_id,
+            driver_name=driver_name,
+            origin_lat=float(o_lat),
+            origin_lng=float(o_lng),
+            destination_lat=float(d_lat) if d_lat else 0.0,
+            destination_lng=float(d_lng) if d_lng else 0.0,
+            origin_address=origen,
+            destination_address=destino,
+            departure_datetime=departure_dt,
+            available_seats=available_seats,
+            cost_per_passenger=float(cost) if cost else None,
+            distance_h3_origin=h3_dist,
+            relevance_score=score,
+        ))
+
+    # 3. Ordenar por score
+    markers.sort(key=lambda m: m.relevance_score, reverse=True)
+
+    if not markers:
+        return NearbyTripsResponse(
+            markers=[],
+            total=0,
+            center_lat=my_lat,
+            center_lng=my_lng,
+            message="No hay conductores disponibles cerca de tu ubicación.",
+        )
+
+    return NearbyTripsResponse(
+        markers=markers,
+        total=len(markers),
+        center_lat=my_lat,
+        center_lng=my_lng,
+    )
