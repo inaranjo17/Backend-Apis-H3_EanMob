@@ -18,6 +18,7 @@ Este backend permite:
   - Cercanía geográfica (hexágonos H3)
   - Destino similar
   - Compatibilidad de horario
+- 🚦 Validar pico y placa urbano y regional para advertencias no bloqueantes al publicar viajes
 
 ---
 
@@ -29,6 +30,7 @@ app/
 │ ├── geocode.py # Endpoint 1 (dirección → H3)
 │ ├── routes.py # Endpoint 2 (rutas)
 │ ├── match.py # Endpoint 3 (matching) (simulada parcialmente mientras se integra la BD real)
+│ ├── pico_placa.py # Endpoint 4 (pico y placa urbano/regional)
 │
 ├── models.py # Modelos de datos (User, Trip, etc.)
 ├── mock_db.py # Base de datos en memoria (simulada mientras se integra la BD real)
@@ -63,6 +65,13 @@ python -m venv .venv
 .venv\Scripts\activate   # Windows
 3. Instalar dependencias
 pip install -r requirements.txt
+
+4. Crear tablas de pico y placa
+
+Ejecutar `app/seed/pico_placa_seed.sql` sobre la base usada por el servicio FastAPI
+(`trips_ean` por defecto). Si las tablas todavía no existen, el endpoint `/check`
+usa la regla urbana por defecto de Bogotá como respaldo y deja eventos regionales vacíos.
+
 4. Configurar variables de entorno
 
 Crear un archivo .env en la raíz del proyecto:
@@ -75,6 +84,9 @@ No subi .env a GitHub. Cada quien debe crear este archivo
 
 5. Ejecutar servidor
 uvicorn app.main:app --reload
+
+Para exponer Pico y Placa como servicio independiente en el puerto definido por arquitectura:
+uvicorn app.pico_placa_main:app --reload --port 8002
 6. Documentación automática
 
 Una vez corriendo:
@@ -146,6 +158,59 @@ Request:
 POST /match/add-test-data
 
 Carga usuarios y viajes de ejemplo.
+
+🚦 4. Pico y Placa
+
+POST /api/v1/pico-placa/check
+
+Verifica si una placa tiene restricción urbana o regional para una fecha/hora.
+La respuesta está pensada para advertir, no para bloquear la publicación del viaje.
+Para Bogotá, el motor interpreta la regla oficial de circulación: en días impares
+pueden circular placas terminadas en `1,2,3,4,5` y en días pares pueden circular
+placas terminadas en `6,7,8,9,0`.
+
+Request:
+{
+  "plate": "ABC128",
+  "datetime": "2026-05-15T10:00:00-05:00",
+  "vehicle_type": "Carro",
+  "city": "BOGOTA",
+  "route_context": {
+    "direction": "inbound",
+    "corridor_id": "autopista-norte"
+  }
+}
+
+Response:
+{
+  "success": true,
+  "data": {
+    "restricted": true,
+    "urban_restricted": true,
+    "regional_restricted": false,
+    "regional_possible": false,
+    "plate_last_digit": "8",
+    "warnings": [
+      {
+        "type": "urban",
+        "severity": "confirmed",
+        "message": "Vehicle is restricted by Bogota urban pico y placa."
+      }
+    ]
+  },
+  "error": null,
+  "message": "Verificacion completada"
+}
+
+GET /api/v1/pico-placa/rules
+
+Lista fuentes activas, reglas urbanas activas y eventos regionales para inspección.
+
+POST /api/v1/pico-placa/sync
+
+Registra una corrida de sincronización. En MVP queda como no-op seguro porque no hay una API JSON oficial estable configurada; el servicio usa reglas cacheadas/sembradas y puede incorporar fuentes oficiales cuando estén disponibles.
+
+El Trips Service consume este endpoint con `PICO_PLACA_SERVICE_URL`, por defecto `http://localhost:8002`.
 
 🔐 Seguridad
 
