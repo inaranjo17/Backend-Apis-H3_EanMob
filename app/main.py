@@ -1,10 +1,11 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
  
 from .config import settings
 from .db import get_pool, close_pool
-from .routers import geocode, routes, match
+from .routers import geocode, routes, match, pico_placa
  
  
 @asynccontextmanager
@@ -29,6 +30,8 @@ app.add_middleware(
 app.include_router(geocode.router)
 app.include_router(routes.router)
 app.include_router(match.router)
+app.include_router(pico_placa.router)
+app.add_exception_handler(RequestValidationError, pico_placa.validation_exception_handler)
  
  
 @app.get("/health")
